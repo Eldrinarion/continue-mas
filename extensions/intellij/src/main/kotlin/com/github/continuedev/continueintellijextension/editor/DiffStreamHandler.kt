@@ -1,10 +1,13 @@
 package com.github.continuedev.continueintellijextension.editor
 
 import com.github.continuedev.continueintellijextension.services.ContinuePluginService
+import com.github.continuedev.continueintellijextension.services.TelemetryService
+import com.github.continuedev.continueintellijextension.utils.getMachineUniqueID
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.command.undo.UndoManager
 import com.intellij.openapi.components.ServiceManager
+import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.RangeHighlighter
@@ -27,7 +30,9 @@ class DiffStreamHandler(
     private val startLine: Int,
     private val endLine: Int,
     private val onClose: () -> Unit,
-    private val onFinish: () -> Unit
+    private val onFinish: () -> Unit,
+    private val telemetryService: TelemetryService = service<TelemetryService>()
+
 ) {
     private data class CurLineState(
         var index: Int, var highlighter: RangeHighlighter? = null, var diffBlock: VerticalDiffBlock? = null
@@ -46,14 +51,40 @@ class DiffStreamHandler(
 
     init {
         initUnfinishedRangeHighlights()
+        this.telemetryService.setup(getMachineUniqueID())
     }
 
     fun acceptAll() {
+        if (diffBlocks.isNotEmpty()) {
+            var statisticsMap = prepareStatisticsForDiffBlocks(diffBlocks)
+            telemetryService.capture("editor_accept_all_suggestions",
+                mapOf("diffBlocks" to diffBlocks.count(),
+                    "statistics" to statisticsMap))
+        }
+
         editor.markupModel.removeAllHighlighters()
         resetState()
     }
 
+    private fun prepareStatisticsForDiffBlocks(diffBlocks: MutableList<VerticalDiffBlock>): MutableMap<String, Map<String, Int>> {
+        var statisticsMap = mutableMapOf<String, Map<String, Int>>()
+        var counter = 0
+        for (diffBlock in diffBlocks) {
+            val statisticsMapForBlock = mutableMapOf<String, Int>()
+            statisticsMapForBlock["deletedLines"] = diffBlock.deletedLines.size
+            statisticsMapForBlock["addedLines"] = diffBlock.addedLines.size
+            statisticsMap[counter++.toString()] = statisticsMapForBlock;
+        }
+        return statisticsMap
+    }
+
     fun rejectAll() {
+        if (diffBlocks.isNotEmpty()) {
+            var statisticsMap = prepareStatisticsForDiffBlocks(diffBlocks)
+            telemetryService.capture("editor_reject_all_suggestions",
+                mapOf("diffBlocks" to diffBlocks.count(),
+                    "statistics" to statisticsMap))
+        }
         // The ideal action here is to undo all changes we made to return the user's edit buffer to the state prior
         // to our changes. However, if the user has accepted or rejected one or more diff blocks, there isn't a simple
         // way to undo our changes without also undoing the diff that the user accepted or rejected.
@@ -128,8 +159,17 @@ class DiffStreamHandler(
 
         if (didAccept) {
             updatePositionsOnAccept(diffBlock.startLine)
+            telemetryService.capture("editor_one_diff_block_accepted",
+                mapOf("diffBlocks" to diffBlocks.count()+1,
+                    "diffBlock.addedLines.size" to diffBlock.addedLines.size,
+                    "diffBlock.deletedLines.size" to diffBlock.deletedLines.size))
+
         } else {
             updatePositionsOnReject(diffBlock.startLine, diffBlock.addedLines.size, diffBlock.deletedLines.size)
+            telemetryService.capture("editor_one_diff_block_rejected",
+                mapOf("diffBlocks" to diffBlocks.count()+1,
+                    "diffBlock.addedLines.size" to diffBlock.addedLines.size,
+                    "diffBlock.deletedLines.size" to diffBlock.deletedLines.size))
         }
 
         if (diffBlocks.isEmpty()) {
