@@ -24,6 +24,13 @@ class TelemetryService {
         } catch (e: Exception) {}
     }
 
+    fun capture(eventName: String) {
+        if (this.posthog == null || this.distinctId == null) {
+            return;
+        }
+        this.posthog?.capture(this.distinctId, eventName)
+    }
+
     fun shutdown() {
         this.posthog?.shutdown()
     }
