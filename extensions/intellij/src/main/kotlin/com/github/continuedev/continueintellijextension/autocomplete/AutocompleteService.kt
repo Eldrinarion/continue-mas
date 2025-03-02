@@ -2,10 +2,15 @@ package com.github.continuedev.continueintellijextension.autocomplete
 
 import com.github.continuedev.continueintellijextension.services.ContinueExtensionSettings
 import com.github.continuedev.continueintellijextension.services.ContinuePluginService
+import com.github.continuedev.continueintellijextension.services.TelemetryService
+import com.github.continuedev.continueintellijextension.utils.getMachineUniqueID
 import com.github.continuedev.continueintellijextension.utils.toUriOrNull
 import com.github.continuedev.continueintellijextension.utils.uuid
 import com.intellij.injected.editor.VirtualFileWindow
-import com.intellij.openapi.application.*
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.WriteAction
+import com.intellij.openapi.application.invokeLater
+import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.ServiceManager
 import com.intellij.openapi.components.service
@@ -58,10 +63,15 @@ class AutocompleteService(private val project: Project) {
         WindowManager.getInstance().getStatusBar(project)
             ?.getWidget(AutocompleteSpinnerWidget.ID) as? AutocompleteSpinnerWidget
     }
+    private val telemetryService = service<TelemetryService>()
 
     // To avoid triggering another completion on partial acceptance,
     // we need to keep track of whether the last change was a partial accept
     var lastChangeWasPartialAccept = false
+
+    init {
+        this.telemetryService.setup(getMachineUniqueID())
+    }
 
     fun triggerCompletion(editor: Editor) {
         val settings =
@@ -129,15 +139,19 @@ class AutocompleteService(private val project: Project) {
         if (completion.isEmpty() || runReadAction { offset != editor.caretModel.offset }) {
             return false
         }
-
         if (completion.lines().size == 1) {
+            telemetryService.capture("auto_completion_shown", mapOf("numberOfLinesInCompletion" to completion.lines().size))
             return true
         }
 
         val endOffset = editor.document.getLineEndOffset(line)
 
         // Do not render if completion is multi-line and caret is in middle of line
-        return offset <= endOffset && editor.document.getText(TextRange(offset, endOffset)).isBlank()
+        val returnValue = offset <= endOffset && editor.document.getText(TextRange(offset, endOffset)).isBlank()
+        if (returnValue) {
+            telemetryService.capture("auto_completion_shown", mapOf("numberOfLinesInCompletion" to completion.lines().size))
+        }
+        return returnValue
     }
 
     private fun deduplicateCompletion(editor: Editor, offset: Int, completion: String): String {
@@ -218,6 +232,7 @@ class AutocompleteService(private val project: Project) {
         editor.document.insertString(offset, text)
 
         editor.caretModel.moveToOffset(offset + text.length)
+        telemetryService.capture("auto_completion_accept", mapOf("numberOfLinesInCompletion" to text.lines().size))
 
         project.service<ContinuePluginService>().coreMessenger?.request(
             "autocomplete/accept",
@@ -281,11 +296,15 @@ class AutocompleteService(private val project: Project) {
         completion.text = text.substring(word.length)
         completion.offset += word.length
         renderCompletion(editor, completion.offset, completion.text!!)
+        telemetryService.capture("auto_completion_partial_accept")
+
     }
 
     private fun cancelCompletion(completion: PendingCompletion) {
         // Send cancellation message to core
         widget?.setLoading(false)
+        val text = completion.text ?: return
+        telemetryService.capture("auto_completion_cancelled", mapOf("numberOfLinesInCompletion" to text.lines().size))
         project.service<ContinuePluginService>().coreMessenger?.request("autocomplete/cancel", null, null, ({}))
     }
 
