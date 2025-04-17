@@ -1,14 +1,14 @@
 package com.github.continuedev.continueintellijextension.services
-
-import IntelliJIDE
 import com.github.continuedev.continueintellijextension.`continue`.CoreMessenger
 import com.github.continuedev.continueintellijextension.`continue`.CoreMessengerManager
 import com.github.continuedev.continueintellijextension.`continue`.DiffManager
 import com.github.continuedev.continueintellijextension.`continue`.IdeProtocolClient
 import com.github.continuedev.continueintellijextension.toolWindow.ContinuePluginToolWindowFactory
+import com.github.continuedev.continueintellijextension.utils.getMachineUniqueID
 import com.github.continuedev.continueintellijextension.utils.uuid
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.DumbAware
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +16,8 @@ import kotlinx.coroutines.cancel
 
 @Service(Service.Level.PROJECT)
 class ContinuePluginService : Disposable, DumbAware {
+    private val telemetryService: TelemetryService = service<TelemetryService>()
+
     private val coroutineScope = CoroutineScope(Dispatchers.Main)
     var continuePluginWindow: ContinuePluginToolWindowFactory.ContinuePluginWindow? = null
     var ideProtocolClient: IdeProtocolClient? = null
@@ -25,6 +27,10 @@ class ContinuePluginService : Disposable, DumbAware {
     var workspacePaths: Array<String>? = null
     var windowId: String = uuid()
     var diffManager: DiffManager? = null
+
+    init {
+        this.telemetryService.setup(getMachineUniqueID())
+    }
 
     override fun dispose() {
         coroutineScope.cancel()
@@ -39,6 +45,8 @@ class ContinuePluginService : Disposable, DumbAware {
         data: Any?,
         messageId: String = uuid()
     ) {
+        if (messageType == "focusContinueInputWithoutClear" || messageType == "focusContinueInputWithNewSession")
+            telemetryService.capture("chat_$messageType")
         continuePluginWindow?.browser?.sendToWebview(messageType, data, messageId)
     }
 
